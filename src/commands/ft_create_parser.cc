@@ -966,6 +966,25 @@ absl::Status SVSVamanaParameters::Verify() const {
         "ALGORITHM HNSW for BFLOAT16 storage, or COMPRESSION FP16 for "
         "compressed FP16 storage inside SVS.");
   }
+  const auto max_m_value = options::GetMaxM().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(graph_max_degree, 2, max_m_value))
+      << kGraphMaxDegreeParam
+      << " must be a positive integer greater than 2 and cannot exceed "
+      << max_m_value << ".";
+  const auto max_ef_construction_value =
+      options::GetMaxEfConstruction().GetValue();
+  VMSDK_RETURN_IF_ERROR(vmsdk::VerifyRange(
+      construction_window_size, 1, max_ef_construction_value))
+      << kConstructionWindowSizeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_ef_construction_value << ".";
+  const auto max_ef_runtime_value = options::GetMaxEfRuntime().GetValue();
+  VMSDK_RETURN_IF_ERROR(
+      vmsdk::VerifyRange(search_window_size, 1, max_ef_runtime_value))
+      << kSearchWindowSizeParam
+      << " must be a positive integer greater than 0 and cannot exceed "
+      << max_ef_runtime_value << ".";
   if (construction_window_size < graph_max_degree) {
     return absl::InvalidArgumentError(absl::StrCat(
         kConstructionWindowSizeParam, " (", construction_window_size,
