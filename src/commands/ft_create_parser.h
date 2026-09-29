@@ -138,8 +138,7 @@ struct SVSVamanaParameters : public FTCreateVectorParameters {
   // -1.0 sentinel: use the metric-specific compiled default (1.2 for L2,
   // 0.95 for IP/COSINE) when the user does not pass ALPHA.
   float alpha{kDefaultSVSAlphaSentinel};
-  data_model::SVSCompressionType compression{
-      data_model::SVS_COMPRESSION_NONE};
+  data_model::SVSCompressionType compression{data_model::SVS_COMPRESSION_NONE};
   data_model::RawVectorStorage raw_vector_storage{
       data_model::RAW_VECTOR_STORAGE_KEEP};
   absl::Status Verify() const;
