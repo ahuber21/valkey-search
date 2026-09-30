@@ -147,6 +147,17 @@ if(UNIX AND NOT APPLE
     target_link_libraries(svs_stream_adapter_test PRIVATE testing_common_base)
     target_link_libraries(svs_stream_adapter_test PRIVATE svs_c_api_static)
     finalize_test_flags(svs_stream_adapter_test)
+
+    # SVS RDB save/load test - VectorSVS<T>::SaveIndexImpl / LoadFromRDB, same
+    # guard as svs_stream_adapter_test.
+    add_executable(vector_svs_test
+        ${CMAKE_CURRENT_LIST_DIR}/vector_svs_test.cc)
+    target_include_directories(vector_svs_test PUBLIC
+                               ${CMAKE_CURRENT_LIST_DIR})
+    target_link_libraries(vector_svs_test PRIVATE testing_common_base)
+    target_link_libraries(vector_svs_test PRIVATE vector_svs)
+    target_link_libraries(vector_svs_test PRIVATE svs_c_api_static)
+    finalize_test_flags(vector_svs_test)
 endif()
 
 # 1. Core Test Suite - consolidates core functionality tests
