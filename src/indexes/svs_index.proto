@@ -17,18 +17,14 @@ message SVSIndexHeader {
   // stream entirely and leaves the index to bootstrap on the first write.
   bool has_index = 3;
 
-  // Count of labels at save time, before consolidation. Advisory: drives a
-  // warning and a metric only, never a gate, or consolidated indexes fail.
-  uint64 label_count = 4;
-
   // Element type T (storage type after compression). Consistency check on
   // the proto; storage type derives from compression, not this field.
-  VectorDataType element_type = 5;
+  VectorDataType element_type = 4;
 
   // Vector dimensionality. Must match the ingest schema exactly.
-  uint32 dimensionality = 6;
+  uint32 dimensionality = 5;
 
   // Echo of the SVS build configuration. Mismatch (especially in compression)
   // with expectations triggers InvalidArgumentError on load.
-  SVSVamanaAlgorithm build_config = 7;
+  SVSVamanaAlgorithm build_config = 6;
 }

@@ -240,7 +240,6 @@ data_model::SVSIndexHeader ValidHeaderFor(
   header.set_format_version(kKnownGoodFormatVersion);
   header.set_svs_version(svs_get_version());
   header.set_has_index(false);
-  header.set_label_count(0);
   header.set_element_type(data_model::VECTOR_DATA_TYPE_FLOAT32);
   header.set_dimensionality(kDimensions);
   *header.mutable_build_config() = proto.svs_vamana_algorithm();

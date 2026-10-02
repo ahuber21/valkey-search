@@ -32,7 +32,6 @@
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
 #include "third_party/hnswlib/hnswlib.h"
-#include "vmsdk/src/log.h"
 #include "vmsdk/src/status/status_macros.h"
 #include "vmsdk/src/valkey_module_api/valkey_module.h"
 
@@ -541,10 +540,6 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
           "SVS_VAMANA RDB header element_type mismatch: expected ",
           instance->GetVectorDataType(), ", got ", header.element_type()));
     }
-    // label_to_record_ fills in only after this returns (LoadTrackedKeys), so
-    // the earliest comparison point is GetOrCreateVectorLockFree.
-    instance->expected_label_count_ = header.label_count();
-
     if (!header.has_index()) {
       // Handle-less empty index (design.md "Empty index"): svs_index_ stays
       // null and bootstraps on the first HSET, same as a fresh Create().
@@ -850,7 +845,6 @@ absl::Status VectorSVS<T>::SaveIndexImpl(
   header.set_format_version(kSvsHeaderFormatVersion);
   header.set_svs_version(svs_get_version());
   header.set_has_index(svs_index_ != nullptr);
-  header.set_label_count(label_to_record_.size());
   header.set_element_type(GetVectorDataType());
   header.set_dimensionality(static_cast<uint32_t>(dimensions_));
   FillSvsVamanaProto(build_config_, header.mutable_build_config());
@@ -911,15 +905,6 @@ std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetOrCreateVectorLockFree(
   auto [it, inserted] = label_to_record_.try_emplace(internal_id, nullptr);
   if (!inserted) {
     ++Metrics::GetStats().svs_duplicate_label_on_load_cnt;
-    return it->second;
-  }
-  // Consolidation only ever undercounts (design.md), so exceeding the
-  // header's count is the one direction worth a throttled warning.
-  if (expected_label_count_.has_value() &&
-      label_to_record_.size() > *expected_label_count_) {
-    VMSDK_LOG_EVERY_N_SEC(WARNING, nullptr, 1)
-        << "SVS_VAMANA RDB load: label count " << label_to_record_.size()
-        << " exceeds the header's advisory count " << *expected_label_count_;
   }
   return it->second;
 }

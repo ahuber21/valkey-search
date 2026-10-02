@@ -131,9 +131,6 @@ class VectorSVS : public VectorType<T> {
   SVSBuildConfig build_config_;
   mutable absl::flat_hash_map<uint64_t, std::shared_ptr<const VectorRecord>>
       label_to_record_ ABSL_GUARDED_BY(resize_mutex_);
-  // Advisory label_count from the RDB header (LoadFromRDB); compared in
-  // GetOrCreateVectorLockFree, the earliest point label_to_record_ refills.
-  std::optional<uint64_t> expected_label_count_;
 };
 
 }  // namespace valkey_search::indexes
