@@ -388,6 +388,38 @@ TEST_F(VectorSVSTest, LoadFromRdbRejectsPayloadChunksRemainingAfterSvsStops) {
               testing::HasSubstr("payload chunks remain"));
 }
 
+TEST_F(VectorSVSTest, LoadFromRdbRejectsTrailingChunksForEmptyIndex) {
+  FakeSafeRDB original_rdb;
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&original_rdb)));
+
+  // An empty save writes exactly one real chunk, the header, so the iterator's
+  // one-chunk lookahead is already done once the header is handed out.
+  FakeSafeRDB spliced_rdb;
+  {
+    SupplementalContentChunkIter in_iter(&original_rdb);
+    auto header = in_iter.Next();
+    VMSDK_EXPECT_OK(header);
+    EXPECT_FALSE(in_iter.HasNext());
+    RDBChunkOutputStream out(&spliced_rdb);
+    VMSDK_EXPECT_OK(out.SaveString((*header)->binary_content()));
+    VMSDK_EXPECT_OK(out.SaveString("extra-unread-chunk"));
+    VMSDK_EXPECT_OK(out.Close());
+  }
+
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&spliced_rdb), 0);
+  EXPECT_EQ(loaded.status().code(), absl::StatusCode::kInvalidArgument);
+  EXPECT_THAT(loaded.status().message(),
+              testing::HasSubstr("payload chunks remain"));
+}
+
 // -- Duplicate-label metric ---------------------------------------------------
 
 TEST_F(VectorSVSTest, DuplicateLabelOnLoadIncrementsMetric) {

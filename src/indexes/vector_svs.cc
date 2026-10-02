@@ -548,6 +548,13 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
     if (!header.has_index()) {
       // Handle-less empty index (design.md "Empty index"): svs_index_ stays
       // null and bootstraps on the first HSET, same as a fresh Create().
+      // A correct empty save writes only the header, so the chunk lookahead
+      // already leaves the stream at end; anything left is format drift.
+      if (!input.AtEnd()) {
+        return absl::InvalidArgumentError(
+            "SVS_VAMANA RDB load: payload chunks remain after a header with "
+            "has_index=false");
+      }
       return instance;
     }
 
