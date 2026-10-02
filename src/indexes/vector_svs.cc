@@ -416,8 +416,7 @@ absl::StatusOr<svs_index_h> BootstrapIndex(
   return index;
 }
 
-// Compares the v1 fields that determine SVS's on-disk layout; leanvec_*
-// are v2 and unreachable here.
+// Compares the v1 fields that determine SVS's on-disk layout
 bool BuildConfigMatches(const SVSBuildConfig& expected,
                         const data_model::SVSVamanaAlgorithm& header_config) {
   return expected.graph_max_degree == header_config.graph_max_degree() &&
