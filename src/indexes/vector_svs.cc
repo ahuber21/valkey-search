@@ -521,22 +521,6 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
           current_svs_version));
     }
 
-    const auto& svs_proto = vector_index_proto.svs_vamana_algorithm();
-    if (!CompressionToSvsDataType(svs_proto.compression()).has_value()) {
-      return absl::InvalidArgumentError(
-          "SVS_VAMANA: COMPRESSION is proprietary / v2 and not available in "
-          "this build");
-    }
-    SVSBuildConfig build_config{
-        svs_proto.graph_max_degree(),   svs_proto.construction_window_size(),
-        svs_proto.search_window_size(), svs_proto.alpha(),
-        svs_proto.compression(),
-    };
-    if (!BuildConfigMatches(build_config, header.build_config())) {
-      return absl::InvalidArgumentError(
-          "SVS_VAMANA RDB header build_config does not match the index "
-          "definition");
-    }
     if (header.dimensionality() != vector_index_proto.dimension_count()) {
       return absl::InvalidArgumentError(absl::StrCat(
           "SVS_VAMANA RDB header dimensionality mismatch: expected ",
@@ -544,18 +528,19 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
           header.dimensionality()));
     }
 
-    auto instance = std::shared_ptr<VectorSVS<T>>(
-        new VectorSVS<T>(vector_index_proto.dimension_count(),
-                         attribute_identifier, attribute_data_type->ToProto(),
-                         db_num),
-        vmsdk::DestructByMainThread<VectorSVS<T>>{});
-    instance->Init(vector_index_proto.distance_metric());
+    VMSDK_ASSIGN_OR_RETURN(auto instance,
+                           Create(vector_index_proto, attribute_identifier,
+                                  attribute_data_type->ToProto(), db_num));
+    if (!BuildConfigMatches(instance->build_config_, header.build_config())) {
+      return absl::InvalidArgumentError(
+          "SVS_VAMANA RDB header build_config does not match the index "
+          "definition");
+    }
     if (header.element_type() != instance->GetVectorDataType()) {
       return absl::InvalidArgumentError(absl::StrCat(
           "SVS_VAMANA RDB header element_type mismatch: expected ",
           instance->GetVectorDataType(), ", got ", header.element_type()));
     }
-    instance->build_config_ = build_config;
     // label_to_record_ fills in only after this returns (LoadTrackedKeys), so
     // the earliest comparison point is GetOrCreateVectorLockFree.
     instance->expected_label_count_ = header.label_count();
@@ -569,9 +554,9 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
     SvsRdbInputStream adapter(input);
     svs_stream_interface iface = adapter.AsInterface();
     ScopedSvsError err;
-    auto builder =
-        AssembleIndexBuilder(build_config, vector_index_proto.distance_metric(),
-                             instance->dimensions_, err.get());
+    auto builder = AssembleIndexBuilder(instance->build_config_,
+                                        vector_index_proto.distance_metric(),
+                                        instance->dimensions_, err.get());
     if (!builder.ok()) return builder.status();
 
     svs_index_h index = svs_index_load_stream_dynamic(
