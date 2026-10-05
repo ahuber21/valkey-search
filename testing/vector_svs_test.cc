@@ -371,8 +371,7 @@ TEST_F(VectorSVSTest, LoadFromRdbRejectsPayloadChunksRemainingAfterSvsStops) {
     RDBChunkOutputStream out(&spliced_rdb);
     while (in_iter.HasNext()) {
       auto chunk = in_iter.Next();
-      VMSDK_EXPECT_OK(chunk);
-      if (!(*chunk)->has_binary_content()) break;  // sentinel: do not copy
+      ASSERT_TRUE(chunk.ok());
       VMSDK_EXPECT_OK(out.SaveString((*chunk)->binary_content()));
     }
     VMSDK_EXPECT_OK(out.SaveString("extra-unread-chunk"));
