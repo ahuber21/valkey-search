@@ -902,6 +902,9 @@ std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetVectorLockFree(
 template <typename T>
 std::shared_ptr<const VectorRecord>& VectorSVS<T>::GetOrCreateVectorLockFree(
     uint64_t internal_id) {
+  // Inserts into label_to_record_ without resize_mutex_: a rehash would
+  // invalidate references held elsewhere. Main-thread RDB load only.
+  vmsdk::VerifyMainThread();
   auto [it, inserted] = label_to_record_.try_emplace(internal_id, nullptr);
   if (!inserted) {
     ++Metrics::GetStats().svs_duplicate_label_on_load_cnt;
