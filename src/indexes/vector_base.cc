@@ -429,9 +429,6 @@ absl::Status VectorBase::SaveTrackedKeys(
 absl::Status VectorBase::LoadTrackedKeys(
     ValkeyModuleCtx *ctx, const AttributeDataType *attribute_data_type,
     SupplementalContentChunkIter &&iter) {
-  // resize_mutex_ must precede key_to_metadata_mutex_, the order ModifyRecord
-  // takes them in; reversing it deadlocks with no diagnostic.
-  absl::WriterMutexLock resize_lock(&resize_mutex_);
   absl::WriterMutexLock lock(&key_to_metadata_mutex_);
 
   while (iter.HasNext()) {

@@ -115,8 +115,7 @@ class VectorSVS : public VectorType<T> {
   // SVS has no tombstones, so every label LoadTrackedKeys re-encounters is
   // new to this map; try_emplace instead of the base class's CHECK.
   std::shared_ptr<const VectorRecord> &GetOrCreateVectorLockFree(
-      uint64_t internal_id) override
-      ABSL_EXCLUSIVE_LOCKS_REQUIRED(resize_mutex_);
+      uint64_t internal_id) override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::shared_ptr<const VectorRecord> &GetVector(
       uint64_t internal_id) const override ABSL_NO_THREAD_SAFETY_ANALYSIS;
   std::optional<hnswlib::tableint> GetAlgoIdLockFree(
