@@ -89,6 +89,14 @@ class SvsRdbInputStream {
   }
 
   size_t ReadImpl(void *buf, size_t n, svs_error_h out_err) {
+    // Zero is reserved for indicating EOF
+    if (n == 0) {
+      status_ = absl::InternalError(
+          "SVS_VAMANA RDB load: SVS requested a 0-length read");
+      svs_error_set(out_err, SVS_ERROR_GENERIC,
+                    std::string(status_.message()).c_str());
+      return 0;
+    }
     // Loops, not branches: an empty-but-present chunk is not the sentinel, and
     // returning 0 for one would signal a false clean EOF and truncate the load.
     while (residual_offset_ >= residual_.size()) {

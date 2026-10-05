@@ -186,6 +186,32 @@ TEST_F(SvsStreamAdapterTest, ReadEofReturnsZeroWithoutErrorSet) {
   EXPECT_TRUE(in.AtEnd());
 }
 
+TEST_F(SvsStreamAdapterTest, ReadZeroLengthRequestIsAnError) {
+  FakeSafeRDB fake_rdb;
+  WriteChunks(fake_rdb, {"abc"});
+  RDBChunkInputStream in{SupplementalContentChunkIter(&fake_rdb)};
+  SvsRdbInputStream adapter(in);
+  svs_stream_interface iface = adapter.AsInterface();
+
+  // Zero is indistinguishable from end of stream, so a 0-length request is
+  // refused outright and the stream is left untouched.
+  char buf[8] = {};
+  {
+    ScopedSvsError err;
+    EXPECT_EQ(iface.ops->read(iface.self, buf, 0, err.get()), 0u);
+    EXPECT_FALSE(svs_error_ok(err.get()));
+    EXPECT_EQ(adapter.status().code(), absl::StatusCode::kInternal);
+    EXPECT_FALSE(adapter.consumed_sentinel());
+  }
+
+  // No chunk was consumed: a real read still gets the first chunk.
+  ScopedSvsError err;
+  size_t n = iface.ops->read(iface.self, buf, sizeof(buf), err.get());
+  EXPECT_EQ(n, 3u);
+  EXPECT_EQ(std::string(buf, n), "abc");
+  EXPECT_TRUE(svs_error_ok(err.get()));
+}
+
 TEST_F(SvsStreamAdapterTest, ReadSkipsEmptyButPresentChunk) {
   FakeSafeRDB fake_rdb;
   WriteChunks(fake_rdb, {"abc", "", "def"});
