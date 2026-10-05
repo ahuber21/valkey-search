@@ -100,12 +100,13 @@ def _bgsave_and_restart(test):
     the resulting RDB. Unlike DEBUG RELOAD this forks, which is the only way
     to exercise the AtForkPrepare-suspended save path the design doc calls
     out as the actual gate."""
-    test.client.execute_command("BGSAVE")
-    waiters.wait_for_equal(
-        lambda: test.client.info("persistence")["rdb_bgsave_in_progress"],
-        0,
-        timeout=30,
-    )
+    reply = test.client.execute_command("BGSAVE")
+    if isinstance(reply, bytes):
+        reply = reply.decode()
+    # A "Background saving scheduled" reply leaves rdb_bgsave_in_progress at 0
+    # too, so without this assert the restart would read the stale RDB.
+    assert reply == "Background saving started", reply
+    test.server.wait_for_save_done(test.client)
     test.server.restart(remove_rdb=False)
     assert test.client.ping()
     waiters.wait_for_true(
