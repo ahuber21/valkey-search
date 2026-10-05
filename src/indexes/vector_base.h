@@ -266,7 +266,8 @@ class VectorBase : public IndexBase {
       ABSL_LOCKS_EXCLUDED(key_to_metadata_mutex_);
   absl::Status LoadTrackedKeys(ValkeyModuleCtx *ctx,
                                const AttributeDataType *attribute_data_type,
-                               SupplementalContentChunkIter &&iter);
+                               SupplementalContentChunkIter &&iter)
+      ABSL_LOCKS_EXCLUDED(resize_mutex_, key_to_metadata_mutex_);
 
   uint32_t GetMutationWeight() const override;
 
@@ -415,7 +416,7 @@ class VectorBase : public IndexBase {
   // During LoadTrackedKeys, allow an index implementation to create missing
   // labels instead of crashing on the CHECK in GetVectorLockFree.
   virtual std::shared_ptr<const VectorRecord> &GetOrCreateVectorLockFree(
-      uint64_t internal_id) {
+      uint64_t internal_id) ABSL_EXCLUSIVE_LOCKS_REQUIRED(resize_mutex_) {
     return GetVectorLockFree(internal_id);
   }
 
