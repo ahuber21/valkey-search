@@ -104,7 +104,8 @@ svs_threadpool_t kSvsThreadpoolIface{&kSvsThreadpoolOps, nullptr};
 // maxmemory just like the module's own malloc arena.
 constexpr size_t kSvsAllocatorHugePageSize = 2 * 1024 * 1024;
 
-// Block size passed to svs_index_build_dynamic. SVS's "default" (0)
+// Block size for both svs_index_build_dynamic and the RDB stream load; a
+// mismatch makes a loaded index reserve differently. SVS's "default" (0)
 // resolves to 2^30 bytes, materialized up-front on the first HSET;
 // 16 MiB keeps the first-add reservation bounded. Measured 16–64 MiB
 // behave identically; smaller wastes per-block overhead at large DIM.
@@ -562,7 +563,8 @@ absl::StatusOr<std::shared_ptr<VectorSVS<T>>> VectorSVS<T>::LoadFromRDB(
     if (!builder.ok()) return builder.status();
 
     svs_index_h index = svs_index_load_stream_dynamic(
-        builder->get(), &iface, /*blocksize_bytes=*/0, err.get());
+        builder->get(), &iface, /*blocksize_bytes=*/kSvsBlockSizeBytes,
+        err.get());
     if (index == nullptr) {
       if (!adapter.status().ok()) return adapter.status();
       return SvsErrorToStatus(err.get(), "index_load_stream_dynamic");
