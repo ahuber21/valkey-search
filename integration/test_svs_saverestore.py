@@ -288,7 +288,8 @@ class TestSvsSaveRestoreWritesBetweenReloads(ValkeySearchTestCaseDebugMode):
 
 
 class TestSvsSaveRestoreCompression(ValkeySearchTestCaseDebugMode):
-    """Case 4: SQ8 compression round-trip. `compression` is the one
+    """Case 4: FP16 compression round-trip; SQ8 is rejected by FT.CREATE
+    until range calibration lands. `compression` is the one
     build-config field in the header (docs/svs-rdb/design.md "Header") that
     genuinely has to match the payload, since the storage element type
     derives from it alone."""
@@ -298,9 +299,9 @@ class TestSvsSaveRestoreCompression(ValkeySearchTestCaseDebugMode):
     def _setup_index(self, index_name: str):
         self.index_name = index_name
         client: Valkey = self.client
-        _create_svs_index(client, index_name, compression="SQ8")
+        _create_svs_index(client, index_name, compression="FP16")
         assert _v_index(client, index_name)["algorithm"]["compression"] == \
-            "SVS_COMPRESSION_SQ8"
+            "SVS_COMPRESSION_FP16"
         _populate(client, self.NUM_VECTORS)
         waiters.wait_for_equal(
             lambda: _v_index(client, index_name)["size"], self.NUM_VECTORS, timeout=30
@@ -309,12 +310,12 @@ class TestSvsSaveRestoreCompression(ValkeySearchTestCaseDebugMode):
 
     def test_debug_reload_preserves_compression_and_knn(self):
         client: Valkey = self.client
-        pre = self._setup_index("svs_sq8_reload")
+        pre = self._setup_index("svs_fp16_reload")
 
         client.execute_command("DEBUG", "RELOAD")
 
         idx_info = _v_index(client, self.index_name)
-        assert idx_info["algorithm"]["compression"] == "SVS_COMPRESSION_SQ8"
+        assert idx_info["algorithm"]["compression"] == "SVS_COMPRESSION_FP16"
         assert idx_info["size"] == self.NUM_VECTORS
         post = _collect_knn(client, self.index_name, self.NUM_VECTORS)
         for (k1, r1), (k2, r2) in zip(pre, post):
@@ -326,12 +327,12 @@ class TestSvsSaveRestoreCompression(ValkeySearchTestCaseDebugMode):
 
     def test_bgsave_restart_preserves_compression_and_knn(self):
         client: Valkey = self.client
-        pre = self._setup_index("svs_sq8_bgsave")
+        pre = self._setup_index("svs_fp16_bgsave")
 
         _bgsave_and_restart(self)
 
         idx_info = _v_index(client, self.index_name)
-        assert idx_info["algorithm"]["compression"] == "SVS_COMPRESSION_SQ8"
+        assert idx_info["algorithm"]["compression"] == "SVS_COMPRESSION_FP16"
         assert idx_info["size"] == self.NUM_VECTORS
         # Quantization happens once, at ingest; save/load persists and
         # reloads the same quantized codes rather than re-quantizing, so
