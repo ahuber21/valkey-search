@@ -45,42 +45,10 @@ namespace valkey_search::indexes {
 namespace {
 
 constexpr int kDimensions = 8;
-constexpr uint32_t kGraphMaxDegree = 16;
-constexpr uint32_t kConstructionWindowSize = 32;
-constexpr uint32_t kSearchWindowSize = 10;
-
-// vector_svs_test.cc's own proto builder: CreateHNSWVectorIndexProto /
-// CreateFlatVectorIndexProto live in testing/common.h, which is out of this
-// item's file scope, and there is no SVS equivalent there yet.
-data_model::VectorIndex CreateSVSVectorIndexProto(
-    int dimensions, data_model::DistanceMetric distance_metric,
-    data_model::SVSCompressionType compression,
-    uint32_t graph_max_degree = kGraphMaxDegree,
-    uint32_t construction_window_size = kConstructionWindowSize,
-    uint32_t search_window_size = kSearchWindowSize) {
-  data_model::VectorIndex vector_index_proto;
-  vector_index_proto.set_dimension_count(dimensions);
-  vector_index_proto.set_distance_metric(distance_metric);
-  auto svs_algorithm = std::make_unique<data_model::SVSVamanaAlgorithm>();
-  svs_algorithm->set_graph_max_degree(graph_max_degree);
-  svs_algorithm->set_construction_window_size(construction_window_size);
-  svs_algorithm->set_search_window_size(search_window_size);
-  svs_algorithm->set_alpha(0.0f);
-  svs_algorithm->set_compression(compression);
-  svs_algorithm->set_raw_vector_storage(data_model::RAW_VECTOR_STORAGE_KEEP);
-  vector_index_proto.set_allocated_svs_vamana_algorithm(
-      svs_algorithm.release());
-  return vector_index_proto;
-}
 
 auto IndexToKey = [](int i) {
   return StringInternStore::Intern(absl::StrCat(i, "_key"));
 };
-
-cancel::Token &CancelNever() {
-  static cancel::Token cancel_never = cancel::Make(1000000, nullptr);
-  return cancel_never;
-}
 
 // GetLabelCount / GetMaxLoadedLabel are public on VectorBase but VectorSVS
 // re-declares its overrides under `protected:` (they're implementation
