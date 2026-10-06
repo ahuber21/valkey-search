@@ -475,6 +475,47 @@ TEST_F(VectorSVSTest, LoadFromRdbRejectsTrailingChunksForEmptyIndex) {
               testing::HasSubstr("payload chunks remain"));
 }
 
+TEST_F(VectorSVSTest, LoadFromRdbRejectsPayloadTruncatedBeforeSvsIsSatisfied) {
+  FakeSafeRDB original_rdb;
+  auto vectors = DeterministicallyGenerateVectors(5, kDimensions, 3.0);
+  auto proto =
+      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
+                                data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto result = testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                 VectorToStr(vectors[i]));
+    VMSDK_EXPECT_OK(result);
+  }
+  VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&original_rdb)));
+
+  // Drop the tail of the last graph payload behind a clean terminator: only SVS
+  // can tell the stream is short, and before failbit it loaded stale rows.
+  FakeSafeRDB truncated_rdb;
+  {
+    SupplementalContentChunkIter in_iter(&original_rdb);
+    RDBChunkOutputStream out(&truncated_rdb);
+    auto header = in_iter.Next();
+    ASSERT_TRUE(header.ok());
+    VMSDK_EXPECT_OK(out.SaveString((*header)->binary_content()));
+    std::string payload;
+    while (in_iter.HasNext()) {
+      auto chunk = in_iter.Next();
+      ASSERT_TRUE(chunk.ok());
+      payload += (*chunk)->binary_content();
+    }
+    VMSDK_EXPECT_OK(out.SaveString(payload.substr(0, payload.size() - 16)));
+    VMSDK_EXPECT_OK(out.Close());
+  }
+
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&truncated_rdb), 0);
+  EXPECT_FALSE(loaded.ok());
+}
+
 // -- Duplicate-label metric ---------------------------------------------------
 
 TEST_F(VectorSVSTest, DuplicateLabelOnLoadIncrementsMetric) {
