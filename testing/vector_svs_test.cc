@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -31,6 +32,7 @@
 #include "src/indexes/index_base.h"
 #include "src/indexes/svs_index.pb.h"
 #include "src/indexes/vector_base.h"
+#include "src/indexes/vector_flat.h"
 #include "src/metrics.h"
 #include "src/rdb_serialization.h"
 #include "src/utils/cancel.h"
@@ -185,6 +187,92 @@ INSTANTIATE_TEST_SUITE_P(
     [](const testing::TestParamInfo<data_model::SVSCompressionType> &info) {
       return data_model::SVSCompressionType_Name(info.param);
     });
+
+// -- Recall and payload span verification ------------------------------------
+
+constexpr int kRecallTestDimensions = 128;
+constexpr size_t kRecallTestVectorCount = 1000;
+
+TEST_F(VectorSVSTest, SaveAndLoadSvsWithRecallAndMultipleChunks) {
+  const uint64_t k = 10;
+  FakeSafeRDB rdb;
+  auto vectors = DeterministicallyGenerateVectors(kRecallTestVectorCount,
+                                                  kRecallTestDimensions, 2.2);
+
+  // Load vectors into a Flat index as ground truth
+  auto index_flat = VectorFlat<float>::Create(
+      CreateFlatVectorIndexProto(kRecallTestDimensions,
+                                 data_model::DISTANCE_METRIC_L2,
+                                 kRecallTestVectorCount + 100, 250),
+      attribute_identifier, attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index_flat);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto result = testing_infra::AddVectorRecord(*(*index_flat), IndexToKey(i),
+                                                 VectorToStr(vectors[i]));
+    VMSDK_EXPECT_OK(result);
+  }
+
+  // Create and save SVS index
+  auto proto = CreateSVSVectorIndexProto(kRecallTestDimensions,
+                                         data_model::DISTANCE_METRIC_L2,
+                                         data_model::SVS_COMPRESSION_NONE);
+  auto index_svs = VectorSVS<float>::Create(proto, attribute_identifier,
+                                            attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index_svs);
+  for (size_t i = 0; i < vectors.size(); ++i) {
+    auto result = testing_infra::AddVectorRecord(**index_svs, IndexToKey(i),
+                                                 VectorToStr(vectors[i]));
+    VMSDK_EXPECT_OK(result);
+  }
+  VMSDK_EXPECT_OK((*index_svs)->SaveIndex(RDBChunkOutputStream(&rdb)));
+  VMSDK_EXPECT_OK((*index_svs)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+
+  // Set up mocks for LoadTrackedKeys
+  std::vector<ValkeyModuleString *> records(kRecallTestVectorCount);
+  for (size_t i = 0; i < kRecallTestVectorCount; ++i) {
+    records[i] =
+        ValkeyModule_CreateString(nullptr, (const char *)vectors[i].data(),
+                                  kRecallTestDimensions * sizeof(float));
+  }
+  ExpectHashGetsForRecords(records);
+
+  // Load SVS index
+  auto loaded_svs = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded_svs);
+  VMSDK_EXPECT_OK((*loaded_svs)
+                      ->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                        SupplementalContentChunkIter(&rdb)));
+
+  // Verify recall against ground truth is >= 0.9
+  auto recall = CalcRecall(index_flat->get(), loaded_svs->get(), k,
+                           kRecallTestDimensions, std::nullopt);
+  EXPECT_GE(recall, 0.9f);
+
+  // Verify payload spans multiple chunks
+  FakeSafeRDB count_rdb;
+  VMSDK_EXPECT_OK((*index_svs)->SaveIndex(RDBChunkOutputStream(&count_rdb)));
+  size_t payload_chunk_count = 0;
+  {
+    SupplementalContentChunkIter iter(&count_rdb);
+    while (iter.HasNext()) {
+      auto chunk = iter.Next();
+      ASSERT_TRUE(chunk.ok());
+      // Presence of the field, not its length, separates payload from the
+      // sentinel; a zero-length chunk is ordinary payload and must be counted.
+      if ((*chunk)->has_binary_content()) {
+        ++payload_chunk_count;
+      }
+    }
+  }
+  EXPECT_GT(payload_chunk_count, 1);
+
+  // Cleanup
+  for (auto *record : records) {
+    ValkeyModule_FreeString(nullptr, record);
+  }
+}
 
 // -- Header validation --------------------------------------------------------
 //

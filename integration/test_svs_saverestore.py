@@ -9,11 +9,14 @@ Four cases carried forward from the round-2 throwaway (docs/svs-rdb/OVERVIEW.md
 "AR6 has a proven starting point"), each written twice: once against
 `DEBUG RELOAD` and once against a real `BGSAVE`-plus-restart, so fork
 coverage comes from every case's promoted variant rather than a separate
-test.
+test. A fifth class, `TestSvsSaveRestoreScale`, repeats the same two
+variants at 1000 vectors / dim 128 so the payload spans multiple RDB
+chunks, with recall checked against a brute-force ground truth.
 """
 
 import struct
 
+import numpy as np
 import pytest
 from valkey.client import Valkey
 
@@ -50,27 +53,65 @@ def _score_map(reply):
 
 
 def _create_svs_index(
-    client: Valkey, index: str, compression: str = "NONE", dim: int = DIM
+    client: Valkey,
+    index: str,
+    compression: str = "NONE",
+    dim: int = DIM,
+    search_window_size=None,
 ):
     """FT.CREATE ALGORITHM SVS_VAMANA. Raw command rather than the Index/Vector
     helper: that helper has no SVS_VAMANA-specific COMPRESSION argument, same
     as test_svs_smoke.py."""
-    args = [
-        "FT.CREATE", index,
-        "SCHEMA", "v", "VECTOR", "SVS_VAMANA",
-        "8" if compression != "NONE" else "6",
+    params = [
         "TYPE", "FLOAT32", "DIM", str(dim), "DISTANCE_METRIC", "L2",
     ]
     if compression != "NONE":
-        args += ["COMPRESSION", compression]
-    client.execute_command(*args)
+        params += ["COMPRESSION", compression]
+    if search_window_size is not None:
+        params += ["SEARCH_WINDOW_SIZE", str(search_window_size)]
+    # The attribute's parameter count must equal len(params); deriving it keeps
+    # the two from drifting when an optional parameter is added below.
+    client.execute_command(
+        "FT.CREATE", index,
+        "SCHEMA", "v", "VECTOR", "SVS_VAMANA", str(len(params)),
+        *params,
+    )
 
 
-def _populate(client: Valkey, n: int, start: int = 1):
-    """HSET doc:start..doc:start+n-1 -> (float(i), 0, 0, 0)."""
-    for i in range(start, start + n):
-        values = [float(i)] + [0.0] * (DIM - 1)
+def _populate(
+    client: Valkey,
+    n: int,
+    start: int = 1,
+    dim: int = DIM,
+    vectors=None,
+):
+    """HSET doc:start..doc:start+n-1. Defaults to (float(i), 0, ..., 0);
+    pass `vectors` (length n, each of length dim) to HSET explicit payloads
+    instead, e.g. for a brute-force recall baseline."""
+    for offset in range(n):
+        i = start + offset
+        if vectors is None:
+            values = [float(i)] + [0.0] * (dim - 1)
+        else:
+            values = vectors[offset]
         client.hset(f"doc:{i}", mapping={"v": _fp32(values)})
+
+
+def _random_vectors(n: int, dim: int, seed: int = 42) -> np.ndarray:
+    """n x dim float32 vectors, deterministic given seed."""
+    rng = np.random.default_rng(seed)
+    return rng.random((n, dim), dtype=np.float32)
+
+
+def _compute_l2_distances(query: np.ndarray, vectors: np.ndarray) -> np.ndarray:
+    diff = vectors - query
+    return np.sum(diff * diff, axis=1)
+
+
+def _brute_force_knn(query: np.ndarray, vectors: np.ndarray, k: int) -> set:
+    """Ground-truth k nearest row indices into `vectors`, exact L2."""
+    distances = _compute_l2_distances(query, vectors)
+    return set(np.argsort(distances)[:k].tolist())
 
 
 def _knn(client: Valkey, index: str, query, k: int):
@@ -82,20 +123,24 @@ def _knn(client: Valkey, index: str, query, k: int):
     return reply
 
 
-def _collect_knn(client: Valkey, index: str, num_vectors: int):
-    """Ordered (key, score) list for a handful of K/anchor probes, so a
-    reload that reorders or perturbs scores is caught."""
+def _collect_knn(client: Valkey, index: str, num_vectors: int, anchor=None, dim: int = DIM):
+    """Ordered (key, score) list for a handful of K probes against `anchor`
+    (default: [num_vectors // 2, 0, ..., 0], matching the integer-encoded
+    vectors `_populate` writes by default), so a reload that reorders or
+    perturbs scores is caught."""
+    if anchor is None:
+        anchor = [num_vectors // 2] + [0.0] * (dim - 1)
     results = []
     for k in (1, 5, 10):
         if k > num_vectors:
             continue
-        reply = _knn(client, index, [num_vectors // 2, 0.0, 0.0, 0.0], k)
+        reply = _knn(client, index, anchor, k)
         scores = _score_map(reply)
         results.append((k, [(key, scores[key]) for key in scores]))
     return results
 
 
-def _bgsave_and_restart(test):
+def _bgsave_and_restart(test, backfill_timeout: int = 30):
     """BGSAVE, wait for it to finish, then hard-restart the server against
     the resulting RDB. Unlike DEBUG RELOAD this forks, which is the only way
     to exercise the AtForkPrepare-suspended save path the design doc calls
@@ -113,7 +158,7 @@ def _bgsave_and_restart(test):
         lambda: FTInfoParser(
             test.client.execute_command("FT.INFO", test.index_name)
         ).backfill_in_progress == 0,
-        timeout=30,
+        timeout=backfill_timeout,
     )
 
 
@@ -344,3 +389,103 @@ class TestSvsSaveRestoreCompression(ValkeySearchTestCaseDebugMode):
             for (key1, score1), (key2, score2) in zip(r1, r2):
                 assert key1 == key2
                 assert score1 == pytest.approx(score2, abs=1e-4)
+
+
+class TestSvsSaveRestoreScale(ValkeySearchTestCaseDebugMode):
+    """Case 5: realistic-scale round-trip. 1000 vectors at dim 128, big
+    enough that the SVS payload spans multiple RDB chunks (unlike the
+    40-vector populated case, which fits in one), so this is the only class
+    that exercises the multi-chunk read path against a real index. Checks
+    the same exact KNN preservation as the populated case, plus recall
+    against a brute-force ground truth on the restored index."""
+
+    DIM = 128
+    NUM_VECTORS = 1000
+    K = 10
+    RECALL_THRESHOLD = 0.9
+    # The default search window size equals K, which would make the recall
+    # assertion a measure of the beam width rather than of the restored graph.
+    SEARCH_WINDOW_SIZE = 64
+    # 1000 vectors take materially longer to ingest and backfill than 40.
+    WAIT_TIMEOUT = 120
+
+    def _setup_index(self, index_name: str):
+        self.index_name = index_name
+        client: Valkey = self.client
+        self.vectors = _random_vectors(self.NUM_VECTORS, self.DIM)
+        self.anchor = self.vectors[0].tolist()
+        _create_svs_index(
+            client,
+            index_name,
+            dim=self.DIM,
+            search_window_size=self.SEARCH_WINDOW_SIZE,
+        )
+        _populate(client, self.NUM_VECTORS, dim=self.DIM, vectors=self.vectors)
+        waiters.wait_for_equal(
+            lambda: _v_index(client, index_name)["size"],
+            self.NUM_VECTORS,
+            timeout=self.WAIT_TIMEOUT,
+        )
+        return _collect_knn(
+            client, index_name, self.NUM_VECTORS, anchor=self.anchor, dim=self.DIM
+        )
+
+    def _assert_recall(self, post):
+        # post entries are (k, [(key, score), ...]); doc:i maps to
+        # self.vectors[i - 1].
+        checked = False
+        for k, results in post:
+            if k != self.K:
+                continue
+            got = {int(key.split(b":")[1]) - 1 for key, _ in results}
+            expected = _brute_force_knn(self.anchor, self.vectors, self.K)
+            recall = len(got & expected) / self.K
+            checked = True
+            assert recall >= self.RECALL_THRESHOLD, (
+                f"recall too low after restore: {recall}"
+            )
+        # Without this the whole check silently becomes a no-op if the probe
+        # list in _collect_knn ever stops including K.
+        assert checked, f"no k={self.K} probe to check recall against"
+
+    def test_debug_reload_preserves_knn_and_recall(self):
+        client: Valkey = self.client
+        pre = self._setup_index("svs_scale_reload")
+
+        client.execute_command("DEBUG", "RELOAD")
+
+        assert _v_index(client, self.index_name)["size"] == self.NUM_VECTORS
+        post = _collect_knn(
+            client, self.index_name, self.NUM_VECTORS, anchor=self.anchor, dim=self.DIM
+        )
+        assert len(pre) == len(post)
+        for (k1, r1), (k2, r2) in zip(pre, post):
+            assert k1 == k2
+            assert [key for key, _ in r1] == [key for key, _ in r2], (
+                f"KNN key order changed across DEBUG RELOAD for k={k1}"
+            )
+            for (key1, score1), (key2, score2) in zip(r1, r2):
+                assert key1 == key2
+                assert score1 == pytest.approx(score2, abs=1e-4)
+        self._assert_recall(post)
+
+    def test_bgsave_restart_preserves_knn_and_recall(self):
+        client: Valkey = self.client
+        pre = self._setup_index("svs_scale_bgsave")
+
+        _bgsave_and_restart(self, backfill_timeout=self.WAIT_TIMEOUT)
+
+        assert _v_index(client, self.index_name)["size"] == self.NUM_VECTORS
+        post = _collect_knn(
+            client, self.index_name, self.NUM_VECTORS, anchor=self.anchor, dim=self.DIM
+        )
+        assert len(pre) == len(post)
+        for (k1, r1), (k2, r2) in zip(pre, post):
+            assert k1 == k2
+            assert [key for key, _ in r1] == [key for key, _ in r2], (
+                f"KNN key order changed across BGSAVE+restart for k={k1}"
+            )
+            for (key1, score1), (key2, score2) in zip(r1, r2):
+                assert key1 == key2
+                assert score1 == pytest.approx(score2, abs=1e-4)
+        self._assert_recall(post)
