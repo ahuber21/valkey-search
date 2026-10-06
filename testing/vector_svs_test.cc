@@ -13,6 +13,7 @@
 
 #include "src/indexes/vector_svs.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -515,6 +516,106 @@ TEST_F(VectorSVSTest, DuplicateLabelOnLoadIncrementsMetric) {
   EXPECT_EQ(Metrics::GetStats().svs_duplicate_label_on_load_cnt - baseline, 1u);
   // Only one slot exists: the duplicate never got its own map entry.
   EXPECT_EQ(AsBase(*index)->GetLabelCount(), 1u);
+
+  for (auto *record : records) {
+    ValkeyModule_FreeString(nullptr, record);
+  }
+}
+
+// -- Custom SVS allocator parity between build and stream load --------------
+
+std::atomic<int64_t> g_external_memory_net_bytes{0};
+
+int StubIncrExternalMemory(size_t bytes) {
+  g_external_memory_net_bytes.fetch_add(static_cast<int64_t>(bytes));
+  return VALKEYMODULE_OK;
+}
+
+int StubDecrExternalMemory(size_t bytes) {
+  g_external_memory_net_bytes.fetch_sub(static_cast<int64_t>(bytes));
+  return VALKEYMODULE_OK;
+}
+
+// The hooks are process-global; leaving them set silently switches every later
+// SVS test in the binary onto the mmap allocator.
+class ScopedExternalMemoryCounter {
+ public:
+  ScopedExternalMemoryCounter()
+      : saved_incr_(ValkeyModule_IncrExternalMemory),
+        saved_decr_(ValkeyModule_DecrExternalMemory) {
+    ValkeyModule_IncrExternalMemory = StubIncrExternalMemory;
+    ValkeyModule_DecrExternalMemory = StubDecrExternalMemory;
+    g_external_memory_net_bytes.store(0);
+  }
+  ScopedExternalMemoryCounter(const ScopedExternalMemoryCounter &) = delete;
+  ScopedExternalMemoryCounter &operator=(const ScopedExternalMemoryCounter &) =
+      delete;
+  ~ScopedExternalMemoryCounter() {
+    ValkeyModule_IncrExternalMemory = saved_incr_;
+    ValkeyModule_DecrExternalMemory = saved_decr_;
+  }
+
+  int64_t net_bytes() const { return g_external_memory_net_bytes.load(); }
+
+ private:
+  int (*saved_incr_)(size_t);
+  int (*saved_decr_)(size_t);
+};
+
+TEST_F(VectorSVSTest, StreamLoadAllocatesSameBytesAsBuild) {
+  ScopedExternalMemoryCounter guard;
+
+  constexpr int kAllocDimensions = 4;
+  constexpr size_t kAllocVectorCount = 1000;
+  FakeSafeRDB rdb;
+  auto vectors = DeterministicallyGenerateVectors(kAllocVectorCount,
+                                                  kAllocDimensions, 2.2);
+  std::vector<ValkeyModuleString *> records(kAllocVectorCount);
+  for (size_t i = 0; i < kAllocVectorCount; ++i) {
+    records[i] =
+        ValkeyModule_CreateString(nullptr, (const char *)vectors[i].data(),
+                                  kAllocDimensions * sizeof(float));
+  }
+
+  auto proto = CreateSVSVectorIndexProto(kAllocDimensions,
+                                         data_model::DISTANCE_METRIC_L2,
+                                         data_model::SVS_COMPRESSION_NONE);
+  auto index = VectorSVS<float>::Create(proto, attribute_identifier,
+                                        attribute_data_type, 0);
+  VMSDK_EXPECT_OK(index);
+  for (size_t i = 0; i < kAllocVectorCount; ++i) {
+    auto result = testing_infra::AddVectorRecord(**index, IndexToKey(i),
+                                                 VectorToStr(vectors[i]));
+    VMSDK_EXPECT_OK(result);
+  }
+
+  const int64_t built = guard.net_bytes();
+  ASSERT_GT(built, 0) << "custom allocator was not installed on the builder; "
+                         "check the ValkeyModule_Incr/DecrExternalMemory "
+                         "gate in vector_svs.cc";
+
+  VMSDK_EXPECT_OK((*index)->SaveIndex(RDBChunkOutputStream(&rdb)));
+  VMSDK_EXPECT_OK((*index)->SaveTrackedKeys(RDBChunkOutputStream(&rdb)));
+
+  index->reset();
+  ASSERT_EQ(guard.net_bytes(), 0)
+      << "deallocating the built index did not return net bytes to zero; "
+         "build and destroy are asymmetric on the custom allocator";
+
+  ExpectHashGetsForRecords(records);
+
+  auto loaded = VectorSVS<float>::LoadFromRDB(
+      &fake_ctx_, &hash_attribute_data_type_, proto, "attribute_identifier_2",
+      SupplementalContentChunkIter(&rdb), 0);
+  VMSDK_EXPECT_OK(loaded);
+  VMSDK_EXPECT_OK(
+      (*loaded)->LoadTrackedKeys(&fake_ctx_, &hash_attribute_data_type_,
+                                 SupplementalContentChunkIter(&rdb)));
+
+  const int64_t loaded_bytes = guard.net_bytes();
+  EXPECT_EQ(loaded_bytes, built)
+      << "built=" << built << " loaded=" << loaded_bytes
+      << " delta=" << (built - loaded_bytes);
 
   for (auto *record : records) {
     ValkeyModule_FreeString(nullptr, record);
