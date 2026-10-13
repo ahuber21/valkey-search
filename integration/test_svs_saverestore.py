@@ -145,6 +145,8 @@ def _bgsave_and_restart(test, backfill_timeout: int = 30):
     the resulting RDB. Unlike DEBUG RELOAD this forks, which is the only way
     to exercise the AtForkPrepare-suspended save path the design doc calls
     out as the actual gate."""
+    # valkey-py's default BGSAVE callback maps every reply to True.
+    test.client.set_response_callback("BGSAVE", lambda r, **kw: r)
     reply = test.client.execute_command("BGSAVE")
     if isinstance(reply, bytes):
         reply = reply.decode()
