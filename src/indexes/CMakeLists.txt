@@ -139,6 +139,8 @@ if(UNIX AND NOT APPLE
         ${SVS_C_API_DIR}/src/svs_c.cpp
         ${SVS_C_API_DIR}/src/dispatcher_vamana.cpp
         ${SVS_C_API_DIR}/src/dispatcher_dynamic_vamana.cpp
+        ${SVS_C_API_DIR}/src/index_builder.cpp
+        ${SVS_C_API_DIR}/src/index_vamana.cpp
         ${SVS_C_API_DIR}/src/leanvec_training_data.cpp
         ${SVS_C_API_DIR}/src/data_builder.cpp)
     valkey_search_add_static_library(svs_c_api_static "${SRCS_SVS_C_API}")
