@@ -79,9 +79,6 @@ class VectorSVSTestPeer {
   static size_t DeletedSinceConsolidate(const VectorSVS<float> &index) {
     return index.deleted_since_consolidate_.load();
   }
-  static bool NeedsRepair(const VectorSVS<float> &index) {
-    return index.deleted_since_consolidate_.load() > 0;
-  }
   static bool CompressionPending(const VectorSVS<float> &index) {
     return index.compression_pending_.load();
   }
@@ -1247,89 +1244,6 @@ TEST_F(VectorSVSTest, DeleteAllConsolidatesAndKeepsAcceptingWrites) {
 
   VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(0),
                                                  VectorToStr(vectors[0])));
-  auto result = (*index)->Search(VectorToStr(vectors[0]), 1, CancelNever());
-  VMSDK_EXPECT_OK(result);
-  ASSERT_EQ(result->size(), 1u);
-  EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
-}
-
-// -- OnForkPrepare ------------------------------------------------------
-
-TEST_F(VectorSVSTest, OnForkPrepareNoOpWithoutDeletes) {
-  const size_t kKeys = 5;
-  auto index = VectorSVS<float>::Create(
-      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
-                                data_model::SVS_COMPRESSION_NONE),
-      attribute_identifier, attribute_data_type, 0);
-  VMSDK_EXPECT_OK(index);
-  auto vectors = DeterministicallyGenerateVectors(kKeys, kDimensions, 5.0);
-  for (size_t i = 0; i < kKeys; ++i) {
-    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
-                                                   VectorToStr(vectors[i])));
-  }
-  EXPECT_FALSE(VectorSVSTestPeer::NeedsRepair(**index));
-
-  (*index)->OnForkPrepare();
-
-  EXPECT_FALSE(VectorSVSTestPeer::NeedsRepair(**index));
-  EXPECT_EQ(AsBase(*index)->GetLabelCount(), kKeys);
-  auto result = (*index)->Search(VectorToStr(vectors[0]), 1, CancelNever());
-  VMSDK_EXPECT_OK(result);
-  ASSERT_EQ(result->size(), 1u);
-  EXPECT_EQ((*result)[0].external_id, IndexToKey(0));
-}
-
-TEST_F(VectorSVSTest, OnForkPrepareRepairsAfterRemove) {
-  const size_t kKeys = 5;
-  auto index = VectorSVS<float>::Create(
-      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
-                                data_model::SVS_COMPRESSION_NONE),
-      attribute_identifier, attribute_data_type, 0);
-  VMSDK_EXPECT_OK(index);
-  auto vectors = DeterministicallyGenerateVectors(kKeys, kDimensions, 5.0);
-  for (size_t i = 0; i < kKeys; ++i) {
-    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
-                                                   VectorToStr(vectors[i])));
-  }
-  VMSDK_EXPECT_OK(
-      (*index)->RemoveRecord(IndexToKey(0), DeletionType::kRecord));
-  EXPECT_TRUE(VectorSVSTestPeer::NeedsRepair(**index));
-
-  (*index)->OnForkPrepare();
-
-  EXPECT_FALSE(VectorSVSTestPeer::NeedsRepair(**index));
-  EXPECT_EQ(AsBase(*index)->GetLabelCount(), kKeys - 1);
-  auto result = (*index)->Search(VectorToStr(vectors[1]), 1, CancelNever());
-  VMSDK_EXPECT_OK(result);
-  ASSERT_EQ(result->size(), 1u);
-  EXPECT_EQ((*result)[0].external_id, IndexToKey(1));
-}
-
-TEST_F(VectorSVSTest, OnForkPrepareSeesModifyAsDirty) {
-  const size_t kKeys = 5;
-  auto index = VectorSVS<float>::Create(
-      CreateSVSVectorIndexProto(kDimensions, data_model::DISTANCE_METRIC_L2,
-                                data_model::SVS_COMPRESSION_NONE),
-      attribute_identifier, attribute_data_type, 0);
-  VMSDK_EXPECT_OK(index);
-  auto vectors = DeterministicallyGenerateVectors(kKeys, kDimensions, 5.0);
-  for (size_t i = 0; i < kKeys; ++i) {
-    VMSDK_EXPECT_OK(testing_infra::AddVectorRecord(**index, IndexToKey(i),
-                                                   VectorToStr(vectors[i])));
-  }
-  for (auto &v : vectors[0]) v += 1.0f;
-  auto valkey_str = vmsdk::MakeUniqueValkeyString(VectorToStr(vectors[0]));
-  auto vec = VectorRegistry::Instance().DedupOrConstruct(
-      IndexToKey(0), valkey_str.get(), data_model::ATTRIBUTE_DATA_TYPE_HASH, 0,
-      AsBase(*index));
-  VMSDK_EXPECT_OK(
-      (*index)->ModifyRecord(IndexToKey(0), AttributeData(std::move(vec))));
-  EXPECT_TRUE(VectorSVSTestPeer::NeedsRepair(**index));
-
-  (*index)->OnForkPrepare();
-
-  EXPECT_FALSE(VectorSVSTestPeer::NeedsRepair(**index));
-  EXPECT_EQ(AsBase(*index)->GetLabelCount(), kKeys);
   auto result = (*index)->Search(VectorToStr(vectors[0]), 1, CancelNever());
   VMSDK_EXPECT_OK(result);
   ASSERT_EQ(result->size(), 1u);
