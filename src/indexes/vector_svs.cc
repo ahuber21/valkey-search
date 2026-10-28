@@ -841,7 +841,8 @@ template <typename T>
 absl::Status VectorSVS<T>::SaveIndexImpl(
     RDBChunkOutputStream chunked_out) const {
 #if defined(__linux__) && defined(__x86_64__)
-  absl::ReaderMutexLock lock(&resize_mutex_);
+  // Writer lock: SVS save may consolidate and compact, which mutates the index.
+  absl::WriterMutexLock lock(&resize_mutex_);
 
   data_model::SVSIndexHeader header;
   header.set_format_version(kSvsHeaderFormatVersion);
